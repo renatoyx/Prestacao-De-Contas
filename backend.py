@@ -24,7 +24,6 @@ def inicializar_banco():
     conn.close()
 
 def extrair_despesas_pdf(caminho_pdf):
-    # (Lógica de extração de PDF - sem alterações)
     texto_completo = ""
     try:
         with pdfplumber.open(caminho_pdf) as pdf:
@@ -101,16 +100,18 @@ def atualizar_despesa_no_banco(id_despesa, novo_historico, nova_data, novo_valor
         return False
 
 def exportar_para_xlsx(caminho_arquivo):
-    """FUNÇÃO CORRIGIDA: Arredonda os valores antes de exportar."""
+    """FUNÇÃO CORRIGIDA: Converte o valor para texto formatado antes de exportar."""
     try:
         conn = sqlite3.connect(DB_NAME)
         query = "SELECT historico AS 'Histórico', data AS 'Data', valor AS 'Valor (R$)' FROM despesas ORDER BY data"
         df = pd.read_sql_query(query, conn)
         conn.close()
 
-        # --- LINHA ADICIONADA PARA A CORREÇÃO ---
-        # Arredonda a coluna de valor para 2 casas decimais ANTES de salvar
-        df['Valor (R$)'] = df['Valor (R$)'].round(2)
+        # --- NOVA LÓGICA DE FORMATAÇÃO ---
+        # Converte a coluna de números para uma coluna de texto com a formatação desejada
+        df['Valor (R$)'] = df['Valor (R$)'].apply(
+            lambda x: f"R$ {x:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+        )
 
         writer = pd.ExcelWriter(caminho_arquivo, engine='xlsxwriter')
         df.to_excel(writer, index=False, sheet_name='Despesas')
@@ -118,17 +119,11 @@ def exportar_para_xlsx(caminho_arquivo):
         workbook  = writer.book
         worksheet = writer.sheets['Despesas']
 
-        # Este formato aplica o padrão de número brasileiro (1.000,12)
-        formato_numero = workbook.add_format({'num_format': '#.##0,00'})
-
+        # Apenas ajusta a largura da coluna, sem formato de número
         for i, col_nome in enumerate(df.columns):
             column_len = df[col_nome].astype(str).str.len().max()
             column_len = max(column_len, len(col_nome)) + 2
-            
-            if col_nome == 'Valor (R$)':
-                worksheet.set_column(i, i, column_len, formato_numero)
-            else:
-                worksheet.set_column(i, i, column_len)
+            worksheet.set_column(i, i, column_len)
 
         writer.close()
         return True
