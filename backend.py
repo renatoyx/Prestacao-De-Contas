@@ -24,6 +24,7 @@ def inicializar_banco():
     conn.close()
 
 def extrair_despesas_pdf(caminho_pdf):
+    """Lê um PDF e retorna uma lista de dicionários com as despesas, usando uma lógica mais robusta."""
     texto_completo = ""
     try:
         with pdfplumber.open(caminho_pdf) as pdf:
@@ -36,28 +37,70 @@ def extrair_despesas_pdf(caminho_pdf):
         return []
 
     transacoes = []
-    padrao_transacao = re.compile(r'(\d{2}/\d{2}/\d{2,4})\s+(.*?)\s+([\d\.,]+-?)(?:\s+[\d\.,]+)?\s*$')
+    padrao_data = re.compile(r'(\d{2}/\d{2}/\d{2,4})')
+    padrao_valores = re.compile(r'[\d\.,]+-') # Procura apenas valores que terminam com '-'
 
     for linha in texto_completo.split('\n'):
-        match = padrao_transacao.search(linha)
-        if match:
-            data, descricao, valor_str = match.groups()
-            descricao = re.sub(r'^\d+\s+', '', descricao).strip()
-            descricao = re.sub(r'\s{2,}', ' ', descricao)
-            try:
-                if valor_str.endswith('-'):
-                    valor_limpo = valor_str.replace('.', '').replace(',', '.').replace('-', '')
-                    valor_float = float(valor_limpo)
-                    hash_transacao = f"{data}-{descricao[:50]}-{valor_float}"
-                    transacoes.append({
-                        'data': data,
-                        'historico': descricao,
-                        'valor': valor_float,
-                        'hash_transacao': hash_transacao
-                    })
-            except ValueError:
-                continue
+        match_data = padrao_data.search(linha)
+        if not match_data:
+            continue
+
+        data = match_data.group(1)
+        
+        # Encontra todos os valores candidatos a débito na linha
+        candidatos_debito = padrao_valores.findall(linha)
+
+        if not candidatos_debito:
+            continue
+
+        valor_str = ""
+        # --- NOVA LÓGICA INTELIGENTE ---
+        if len(candidatos_debito) == 1:
+            valor_str = candidatos_debito[0]
+        else:
+            # Se há múltiplos valores negativos, escolhe o de menor valor absoluto
+            menor_valor = float('inf')
+            valor_final = ""
+            for c in candidatos_debito:
+                try:
+                    valor_num = float(c.replace('.', '').replace(',', '.').replace('-', ''))
+                    if valor_num < menor_valor:
+                        menor_valor = valor_num
+                        valor_final = c
+                except ValueError:
+                    continue
+            valor_str = valor_final
+        
+        if not valor_str:
+            continue
+
+        # Constrói a descrição removendo a data, o valor correto e outros números
+        descricao = linha
+        descricao = descricao.replace(data, '')
+        
+        todos_os_numeros = re.findall(r'[\d\.,]+-?', linha)
+        for num in todos_os_numeros:
+             if num != data:
+                descricao = descricao.replace(num, '')
+
+        descricao = re.sub(r'\s{2,}', ' ', descricao).strip()
+
+        try:
+            valor_limpo = valor_str.replace('.', '').replace(',', '.').replace('-', '')
+            valor_float = float(valor_limpo)
+            hash_transacao = f"{data}-{descricao[:50]}-{valor_float}"
+            transacoes.append({
+                'data': data,
+                'historico': descricao,
+                'valor': valor_float,
+                'hash_transacao': hash_transacao
+            })
+        except ValueError:
+            continue
+            
     return transacoes
+
+# O restante do arquivo backend.py continua o mesmo...
 
 def salvar_despesas_no_banco(caminho_pdf):
     despesas = extrair_despesas_pdf(caminho_pdf)
@@ -80,7 +123,14 @@ def salvar_despesas_no_banco(caminho_pdf):
 
 def obter_despesas_do_banco():
     conn = sqlite3.connect(DB_NAME)
-    query = "SELECT id, historico, data, valor FROM despesas ORDER BY data"
+    query = """
+        SELECT id, historico, data, valor 
+        FROM despesas 
+        ORDER BY 
+            SUBSTR(data, 7, 4), -- Ano
+            SUBSTR(data, 4, 2), -- Mês
+            SUBSTR(data, 1, 2)  -- Dia
+    """
     cursor = conn.cursor()
     cursor.execute(query)
     resultados = cursor.fetchall()
@@ -100,30 +150,34 @@ def atualizar_despesa_no_banco(id_despesa, novo_historico, nova_data, novo_valor
         return False
 
 def exportar_para_xlsx(caminho_arquivo):
-    """FUNÇÃO CORRIGIDA: Converte o valor para texto formatado antes de exportar."""
     try:
         conn = sqlite3.connect(DB_NAME)
-        query = "SELECT historico AS 'Histórico', data AS 'Data', valor AS 'Valor (R$)' FROM despesas ORDER BY data"
+        query = """
+            SELECT historico AS 'Histórico', data AS 'Data', valor AS 'Valor (R$)'
+            FROM despesas 
+            ORDER BY 
+                SUBSTR(data, 7, 4), -- Ano
+                SUBSTR(data, 4, 2), -- Mês
+                SUBSTR(data, 1, 2)  -- Dia
+        """
         df = pd.read_sql_query(query, conn)
         conn.close()
 
-        # --- NOVA LÓGICA DE FORMATAÇÃO ---
-        # Converte a coluna de números para uma coluna de texto com a formatação desejada
-        df['Valor (R$)'] = df['Valor (R$)'].apply(
-            lambda x: f"R$ {x:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-        )
-
+        df['Valor (R$)'] = df['Valor (R$)'].round(2)
         writer = pd.ExcelWriter(caminho_arquivo, engine='xlsxwriter')
         df.to_excel(writer, index=False, sheet_name='Despesas')
-
         workbook  = writer.book
         worksheet = writer.sheets['Despesas']
+        formato_numero = workbook.add_format({'num_format': '#,##0.00'})
 
-        # Apenas ajusta a largura da coluna, sem formato de número
         for i, col_nome in enumerate(df.columns):
             column_len = df[col_nome].astype(str).str.len().max()
             column_len = max(column_len, len(col_nome)) + 2
-            worksheet.set_column(i, i, column_len)
+            
+            if col_nome == 'Valor (R$)':
+                worksheet.set_column(i, i, column_len, formato_numero)
+            else:
+                worksheet.set_column(i, i, column_len)
 
         writer.close()
         return True
