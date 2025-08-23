@@ -16,8 +16,7 @@ def inicializar_banco():
             data TEXT NOT NULL,
             historico TEXT NOT NULL,
             valor REAL NOT NULL,
-            hash_transacao TEXT UNIQUE NOT NULL,
-            id_nota_fiscal INTEGER
+            hash_transacao TEXT UNIQUE NOT NULL
         )
     ''')
     conn.commit()
@@ -38,23 +37,25 @@ def extrair_despesas_pdf(caminho_pdf):
 
     transacoes = []
     padrao_data = re.compile(r'(\d{2}/\d{2}/\d{2,4})')
-    padrao_valores = re.compile(r'[\d\.,]+-') # Procura apenas valores que terminam com '-'
+    padrao_valores = re.compile(r'[\d\.,]+-')
+    
+    # Adiciona um contador de linha para garantir a unicidade
+    contador_linha = 0
 
     for linha in texto_completo.split('\n'):
+        contador_linha += 1
+        
         match_data = padrao_data.search(linha)
         if not match_data:
             continue
 
         data = match_data.group(1)
-        
-        # Encontra todos os valores candidatos a débito na linha
         candidatos_debito = padrao_valores.findall(linha)
 
         if not candidatos_debito:
             continue
 
         valor_str = ""
-        # --- NOVA LÓGICA INTELIGENTE ---
         if len(candidatos_debito) == 1:
             valor_str = candidatos_debito[0]
         else:
@@ -74,21 +75,20 @@ def extrair_despesas_pdf(caminho_pdf):
         if not valor_str:
             continue
 
-        # Constrói a descrição removendo a data, o valor correto e outros números
         descricao = linha
         descricao = descricao.replace(data, '')
-        
         todos_os_numeros = re.findall(r'[\d\.,]+-?', linha)
         for num in todos_os_numeros:
              if num != data:
                 descricao = descricao.replace(num, '')
-
         descricao = re.sub(r'\s{2,}', ' ', descricao).strip()
 
         try:
             valor_limpo = valor_str.replace('.', '').replace(',', '.').replace('-', '')
             valor_float = float(valor_limpo)
-            hash_transacao = f"{data}-{descricao[:50]}-{valor_float}"
+            # --- HASH CORRIGIDO ---
+            # Adiciona o contador de linha para garantir que o hash seja sempre único
+            hash_transacao = f"{data}-{descricao[:50]}-{valor_float}-{contador_linha}"
             transacoes.append({
                 'data': data,
                 'historico': descricao,
