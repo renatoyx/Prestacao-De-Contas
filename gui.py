@@ -46,7 +46,7 @@ class App(tk.Tk):
         frame_acoes = ttk.LabelFrame(main_frame, text=" Ações ")
         frame_acoes.pack(fill="x", pady=(0, 10))
         
-        btn_importar = ttk.Button(frame_acoes, text="Importar Extrato", command=self.importar_extrato)
+        btn_importar = ttk.Button(frame_acoes, text="Importar Extrato(s)", command=self.importar_extrato) # Texto do botão atualizado
         btn_importar.pack(side="left", padx=5, pady=5)
         btn_salvar = ttk.Button(frame_acoes, text="Salvar Alterações", command=self.salvar_alteracoes)
         btn_salvar.pack(side="left", padx=5, pady=5)
@@ -153,10 +153,23 @@ class App(tk.Tk):
         self.preencher_tabela(list(self.dados_originais.values()))
 
     def importar_extrato(self):
-        caminho_arquivo = filedialog.askopenfilename(filetypes=(("Arquivos PDF", "*.pdf"),))
-        if not caminho_arquivo: return
-        novas = backend.salvar_despesas_no_banco(caminho_arquivo)
-        messagebox.showinfo("Importação Concluída", f"{novas} novas despesas importadas.")
+        """FUNÇÃO MODIFICADA: Agora permite selecionar múltiplos arquivos."""
+        # askopenfilenames (plural) retorna uma tupla de caminhos de arquivos
+        caminhos_arquivos = filedialog.askopenfilenames(
+            title="Selecione um ou mais extratos PDF",
+            filetypes=(("Arquivos PDF", "*.pdf"), ("Todos os arquivos", "*.*"))
+        )
+        if not caminhos_arquivos:
+            return # Usuário cancelou a seleção
+
+        total_novas_despesas = 0
+        for caminho in caminhos_arquivos:
+            # Chama a função do backend para cada arquivo selecionado
+            novas = backend.salvar_despesas_no_banco(caminho)
+            total_novas_despesas += novas
+        
+        messagebox.showinfo("Importação Concluída", f"{total_novas_despesas} novas despesas foram importadas com sucesso!")
+        
         self.atualizar_tabela()
 
     def on_double_click(self, event):
@@ -188,7 +201,6 @@ class App(tk.Tk):
             valores_tela = self.tabela.item(item_id, "values")
             historico_tela, data_tela, valor_str_tela = valores_tela
             _id, orig_hist, orig_data, orig_valor = self.dados_originais[item_id]
-            # --- LINHA CORRIGIDA ---
             try:
                 valor_tela_str_limpo = re.sub(r'[^\d,]', '', valor_str_tela).replace(',', '.')
                 valor_tela = float(valor_tela_str_limpo)
